@@ -1,2 +1,2 @@
 # sg_transfer_s
-预训练词向量来自 https://github.com/Embedding/Chinese-Word-Vectors
+预训练词向量来自 https://github.com/Embedding/Chinese-Word-Vectors 中提供的知乎问答（Word + Character + Ngram）词向量
