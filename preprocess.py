@@ -1,13 +1,15 @@
 # -*-coding: utf-8 -*-
 import jieba, os, re, random
+import editdistance
 import numpy as np
 import utils
 from settings import Settings
 
 setting = Settings()
 
-training_set_dir = os.path.join('data', 'train_factoid_1.json')
-raw_pretrained_w2vec_dir = os.path.join('data', 'sgns.zhihu.bigram-char')
+TRAINING_FILE = os.path.join('data', 'train_factoid_1.json')
+VALIDATE_FILE = os.path.join('data', 'valid_factoid.json')
+W2V_FILE = os.path.join('data', 'sgns.zhihu.bigram-char')
 CLEAN_DIR = os.path.join('data', 'clean')
 HELPER_DIR = os.path.join('data', 'helper')
 if not os.path.isdir(HELPER_DIR):
@@ -29,11 +31,12 @@ def clean_passages(passages):
     for passage in passages:
         passage_text = passage['passage_text']
         passage_text = clean_text(passage_text)
-        if len(passage_text) > 2 * setting.passage_len:
-            p1 = passage_text[:setting.passage_len]
-            p2 = passage_text[setting.passage_len: 2* setting.passage_len]
-            t1 = get_toks(p1)
-            t2 = get_toks(p2)
+        passage_toks = get_toks(passage_text)
+        if len(passage_toks) > 2 * setting.passage_len:
+            t1 = passage_toks[:setting.passage_len]
+            t2 = passage_toks[setting.passage_len: 2* setting.passage_len]
+            p1 = ''.join(t1)
+            p2 = ''.join(t2)
             passage['passage_text'] = p1
             passage['passage_toks'] = t1
             cleaned_passages.append(passage)
@@ -41,8 +44,8 @@ def clean_passages(passages):
             passage['passage_toks'] = t2
             cleaned_passages.append(passage)
         else:
-            passage['passage_text'] = passage_text[:setting.passage_len]
-            passage['passage_toks'] = get_toks(passage_text[:setting.passage_len])
+            passage['passage_toks'] = passage_toks[:setting.passage_len]
+            passage['passage_text'] = ''.join(passage['passage_toks'])
             cleaned_passages.append(passage)
     return cleaned_passages
 
@@ -51,16 +54,18 @@ def clean_text(text):
     text = text.lower()
     text = text.replace('\u3000', ':')
     text = re.sub(r'\s+', ' ', text)
-    text = mark_transfer(text)
     text = DBC2SBC(text)
-    text = text.replace('::', ':').replace('...', '').replace('.:', '.')
+    text = mark_transfer(text)
+    text = text.replace('...', '')
     return text
 
 
 def mark_transfer(text):
     marks = [['，', ','], ['。', '.'], ['“', '"'], ['”', '"'], ['：', ':'], ['？', '?'], ['！', '!'],
              ['%', '%'], ['‘', '\''], ['’', '\''], ['．', ''], ['、', ','], ['【', '['], ['】', ']'],
-             ['（', '('], ['）', ')'], ['＂', '"'], ['＞', '>'],['…', ''], ['；', ';']]
+             ['（', '('], ['）', ')'], ['＂', '"'], ['＞', '>'],['…', ''], ['；', ';'], ['☁', ''],
+             ['╗', ''], ['↑', ''], ['✔', ''], ['::', ':'], [':-:', ''], ['``', '`'], ['>>', '>'], ['.:', '.'],
+             ['☀', ''], ['✈', ''], ['◆', ''], ['█', ''], ['→', ''], ['▪', ''], ['--', '-'], [':*:a:', 'a']]
     for item in marks:
         text = text.replace(item[0], item[1])
     return text
@@ -94,22 +99,28 @@ def get_toks(text):
     return ret_lis
 
 
-def get_w2id(tokens):
+def get_w2id(tokens, isquery=False):
     global word_dic
     for i in tokens:
-        word_dic[i] = word_dic.get(i, 0) + 1
+        if isquery:
+            word_dic[i] = word_dic.get(i, 0) + 10
+        else:
+            word_dic[i] = word_dic.get(i, 0) + 1
 
 
-def get_c2id(text):
+def get_c2id(text, isquery=False):
     global char_dic
     for i in text:
-        char_dic[i] = char_dic.get(i, 0) + 1
+        if isquery:
+            char_dic[i] = char_dic.get(i, 0) + 10
+        else:
+            char_dic[i] = char_dic.get(i, 0) + 1
 
 
 def get_id2vec_dict():
     global id2vec
     print('loading pretrained word embedding ...')
-    with open(raw_pretrained_w2vec_dir, 'r', encoding='utf-8') as f:
+    with open(W2V_FILE, 'r', encoding='utf-8') as f:
         data = f.readline()
         print('pretrained word embedding size:　', data)
         while data:
@@ -132,82 +143,184 @@ def save_id2vec_data(id2vec_dict):
     for id in id2vec_dict.keys():
         vec[id] = id2vec_dict[id]
     print('vec size: ', vec.shape)
-    np.save(os.path.join(HELPER_DIR, 'vec.npy'), vec)
+    np.save(os.path.join(HELPER_DIR, 'vec_plen%i.npy'%setting.passage_len), vec)
 
 
-def get_match_idxs(ori_str, tar_str):
-    res = []
-    reg = re.compile(r"" + tar_str)
-    it = reg.finditer(ori_str)
-    for i in it:
-        data = {'s_idx': i.start(), 'e_idx': i.end() - 1}
-        res.append(data)
-    return res
-
-
-def get_teared_training_set(training_set):
-    teared_training_set = []
-    random.shuffle(training_set)
-    for training_data in training_set:
-        passages = training_data['passages']
-        answer = training_data['answer']
-        query = training_data['query']
-        query_id = training_data['query_id']
-        query_toks = training_data['query_toks']
+def get_teared_dataset(dataset):
+    teared_dataset = []
+    random.shuffle(dataset)
+    cnt = 0
+    print('start tearing %i examples in dataset' % len(dataset))
+    for data in dataset:
+        cnt += 1
+        if cnt % 1000 == 0:
+            print('-'*10, 'got to %i piece of data' % cnt, '-'*10)
+        passages = data['passages']
+        passage_list = [pas['passage_toks'] for pas in passages]
+        answer = data['answer']
+        query = data['query']
+        query_id = data['query_id']
+        query_toks = data['query_toks']
         for passage in passages:
             pas = passage['passage_text']
-            ans = get_match_idxs(pas, answer)
-            data = {
+            pas_toks = passage['passage_toks']
+            item = {
                 'query': {
                     'query_id': query_id,
                     'query_text': query,
                     'query_toks': query_toks,
+                    'query_context_features': get_context_features(pas, query_toks, setting.query_len),
+                    'query_char_features': get_char_features(query_toks, setting.query_len, setting.word_len, pas),
                 },
                 'passage': {
                     'passage_text': pas,
-                    'passage_toks': passage['passage_toks'],
-                    'url': passage['url']
+                    'passage_toks': pas_toks,
+                    'passage_context_features':
+                        get_context_features(query, pas_toks, setting.passage_len, passage_list),
+                    'passage_char_features':
+                        get_char_features(pas_toks, setting.passage_len, setting.word_len, query),
                 },
-                'answer': answer,
-                'answer_idx': ans
+                'answer': answer
             }
-            teared_training_set.append(data)
-    return teared_training_set
+            teared_dataset.append(item)
+    return teared_dataset
 
 
-if __name__ == '__main__':
-    training_set = utils.json_file_to_dict(training_set_dir)
-    for training_data in training_set:
-        cleaned_p = clean_passages(training_data['passages'])
-        training_data['passages'] = cleaned_p
-        cleaned_q = clean_text(training_data['query'])
-        cleaned_q_toks = get_toks(cleaned_q)
-        training_data['query'] = cleaned_q
-        training_data['query_toks'] = cleaned_q_toks
+def get_context_features(ref_sequence, tokens, max_len, passage_list=None):
+    ret = np.zeros((max_len, (4 if passage_list else 2)))
+
+    for i, t in enumerate(tokens):
+        ret[i, 0] = 1 if t in ref_sequence else 0
+        valid = sum(1 for c in t if c in ref_sequence)
+        ret[i, 1] = valid / len(t)
+
+    if passage_list:
+        # passage_text = ''.join(tokens)
+        # temp = compute_jaccard(ref_sequence, passage_text)
+        # idx = 0
+        # for i in range(len(tokens)):
+        #     idx_new = idx + len(tokens[i])
+        #     fz = 0.0
+        #     fm = len(tokens[i])
+        #     for j in range(idx, idx_new):
+        #         fz += temp[j]
+        #     ret[1][i] = fz/fm
+        #     idx = idx_new
+        #
+        # temp = compute_jaccard(jieba.lcut(ref_sequence), tokens)
+        # for i in range(min(len(temp), max_len)):
+        #     ret[2][i] = temp[i]
+        #
+        # temp = compute_editdistance(ref_sequence, tokens)
+        # for i in range(min(len(temp), max_len)):
+        #     ret[3][i] = temp[i]
+
+        for i, t in enumerate(tokens):
+            for passage in passage_list:
+                if t in passage:
+                    ret[i, 2] += 1.0 / len(passage_list)
+            valid = 0.0
+            total = 0.0
+            for c in t:
+                for passage in passage_list:
+                    if c in passage:
+                        valid += 1.0
+                    total += 1.0
+            ret[i, 3] = valid / total
+    return ret
+
+
+def compute_jaccard(qWordList, tokens):
+    l = -int(len(qWordList)/2)
+    r = int(len(qWordList)/2)
+
+    count = 0.0
+    for i in range(l, r):
+        if i >= 0 and i < len(tokens) and (tokens[i] in qWordList):
+            count += 1.0
+    ret = np.zeros(len(tokens))
+    for i, token in enumerate(tokens):
+        ret[i] = count/len(qWordList)
+        if l >= 0 and l < len(tokens) and (tokens[l] in qWordList):
+            count -= 1.0
+        if r+1 >= 0 and r+1 < len(tokens) and (tokens[r+1] in qWordList):
+            count += 1.0
+        l += 1
+        r += 1
+    return ret
+
+
+def compute_editdistance(question,tokens):
+    context = ''.join(tokens)
+    ret = []
+    i = 0
+    for token in tokens:
+        j = i+(len(token)/2)
+        L = int(j-len(question)/2)
+        R = int(j+len(question)/2)
+        ret.append(1.0*editdistance.eval(context[max(0, L):min(R, len(context))], question)/len(question))
+        i += len(token)
+    return ret
+
+
+def get_char_features(tokens, max_seq_len, max_word_len, sentence):
+    ret = np.zeros((max_seq_len, max_word_len, 1))
+    for i, t in enumerate(tokens):
+        t = t[:max_word_len]
+        for j, c in enumerate(t):
+            ret[i, j, 0] = 1 if c in sentence else 0
+    return ret
+
+
+def clean_dataset(dataset):
+    for data in dataset:
+        cleaned_p = clean_passages(data['passages'])
+        data['passages'] = cleaned_p
+        cleaned_q = clean_text(data['query'])
+        cleaned_q_toks = get_toks(cleaned_q)[:setting.query_len]
+        cleaned_q = ''.join(cleaned_q_toks)
+        data['query'] = cleaned_q
+        data['query_toks'] = cleaned_q_toks
+
         for i in cleaned_p:
             get_w2id(i['passage_toks'])
             get_c2id(i['passage_text'])
-        get_w2id(cleaned_q_toks)
-        get_c2id(cleaned_q)
+        get_w2id(cleaned_q_toks, isquery=True)
+        get_c2id(cleaned_q, isquery=True)
+    return dataset
 
-    teared_training_set = get_teared_training_set(training_set)
+
+if __name__ == '__main__':
+    training_set = utils.json_file_to_dict(TRAINING_FILE)
+    validation_set = utils.json_file_to_dict(VALIDATE_FILE)
+
+    training_set = clean_dataset(training_set)
+    validation_set = clean_dataset(validation_set)
+
+    teared_training_set = get_teared_dataset(training_set)
+    teared_validation_set = get_teared_dataset(validation_set)
+
     print('training set size:　', len(teared_training_set))
-    utils.pickleWriter(os.path.join(CLEAN_DIR, 'teared_train_factoid_plen50.pkl'), teared_training_set)
+    print('validation set size: ', len(teared_validation_set))
 
-    id2c = ['<PAD>', '<UNK>'] + utils.toSinList(char_dic, 2)
-    print('char dic: ', id2c)
+    utils.pickleWriter(os.path.join(CLEAN_DIR, 'teared_train_factoid_plen%i.pkl'%setting.passage_len), teared_training_set)
+    utils.pickleWriter(os.path.join(CLEAN_DIR, 'teared_validation_factoid_plen%i.pkl'%setting.passage_len), teared_validation_set)
+
+    id2c = ['<PAD>', '<UNK>'] + utils.toSinList(char_dic, 5)
     c2id = {v: k for k, v in enumerate(id2c)}
-    utils.pickleWriter(os.path.join(HELPER_DIR, 'id2c.pkl'), id2c)
-    utils.pickleWriter(os.path.join(HELPER_DIR, 'c2id.pkl'), c2id)
+    utils.pickleWriter(os.path.join(HELPER_DIR, 'id2c_plen%i.pkl'%setting.passage_len), id2c)
+    utils.pickleWriter(os.path.join(HELPER_DIR, 'c2id_plen%i.pkl'%setting.passage_len), c2id)
     print('char size: ', len(id2c))
 
-    id2w = ['<PAD>', '<UNK>'] + utils.toSinList(word_dic, 2)
-    print('vocab dic: ', id2w)
+    id2w = ['<PAD>', '<UNK>'] + utils.toSinList(word_dic, 5)
     w2id = {v: k for k, v in enumerate(id2w)}
-    utils.pickleWriter(os.path.join(HELPER_DIR, 'id2w.pkl'), id2w)
-    utils.pickleWriter(os.path.join(HELPER_DIR, 'w2id.pkl'), w2id)
+    utils.pickleWriter(os.path.join(HELPER_DIR, 'id2w_plen%i.pkl'%setting.passage_len), id2w)
+    utils.pickleWriter(os.path.join(HELPER_DIR, 'w2id_plen%i.pkl'%setting.passage_len), w2id)
     print('vocab size: ', len(id2w))
 
-    get_id2vec_dict()
-    print('id2vec size: ', len(id2vec))
-    save_id2vec_data(id2vec)
+    utils.pickleWriter(os.path.join(HELPER_DIR, 'size_log_plen%i.pkl'%setting.passage_len), [len(id2w), len(id2c)])
+
+    if setting.w_emb_size == 300:
+        get_id2vec_dict()
+        print('id2vec size: ', len(id2vec))
+        save_id2vec_data(id2vec)
