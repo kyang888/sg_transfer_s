@@ -1,0 +1,125 @@
+from training import training, setting, w2v
+
+import tensorflow as tf
+from keras.backend.tensorflow_backend import set_session
+
+config = tf.ConfigProto()
+config.gpu_options.per_process_gpu_memory_fraction = 0.9
+set_session(tf.Session(config=config))
+from keras.layers import *
+from keras.models import *
+
+quest_input = Input(shape=(setting.query_len,), dtype='int32', name='quest_word_input')
+cand_input = Input(shape=(setting.passage_len,), dtype='int32', name='passage_word_input')
+
+questC_input = Input(shape=(setting.query_len, 10), dtype='int32', name='quest_char_input')
+candC_input = Input(shape=(setting.passage_len, 10), dtype='int32', name='passage_char_input')
+
+questA_input = Input(shape=(setting.query_len, 2), name='quest_word_feature_input')
+candA_input = Input(shape=(setting.passage_len, 4), name='passage_word_feature_input')
+
+questAc_input = Input(shape=(setting.query_len, setting.word_len, 1), name='quest_char_feature_input')
+candAc_input = Input(shape=(setting.passage_len, setting.word_len, 1), name='passage_char_feature_input')
+
+embed_layer = Embedding(setting.nwords, setting.w_emb_size, weights=[w2v], trainable=True)
+quest_emb = Dropout(setting.dropout_rate, (None, 1, None))( embed_layer(quest_input) )
+cand_emb  = Dropout(setting.dropout_rate, (None, 1, None))( embed_layer(cand_input) )
+
+
+cembed_layer = Embedding(setting.nchars + 2, setting.c_emb_size)
+
+char_input = Input(shape=(setting.word_len,), dtype='int32')
+c_emb = SpatialDropout1D(setting.dropout_rate)(cembed_layer(char_input))
+cmask = Lambda(lambda x:K.cast(K.not_equal(x, 0), 'float32'))(char_input)
+cc = Conv1D(setting.c_emb_size, 3, padding='same')(c_emb)
+cc = LeakyReLU()(cc)
+cc = multiply([cc, Reshape((-1,1))(cmask)])
+cc = Lambda(lambda x:K.sum(x, 1))(cc)
+char_model = Model(char_input, cc)
+
+qc_emb = TimeDistributed(char_model)(questC_input)
+cc_emb = TimeDistributed(char_model)(candC_input)
+
+quest_emb = concatenate([quest_emb, qc_emb, questA_input])
+cand_emb  = concatenate([cand_emb, cc_emb, candA_input])
+
+def GLU(x, d):
+    x1 = Dense(d)(x)
+    x2 = Dense(d, activation='sigmoid')(x)
+    return multiply([x1, x2])
+
+lstm_dim = 64
+
+def ResBlock(y, dila):
+    x = Conv1D(lstm_dim, 3, padding='same', dilation_rate=dila)(y)
+    x = GLU(x, lstm_dim)
+    x = Conv1D(lstm_dim, 3, padding='same', dilation_rate=dila)(y)
+    x = GLU(x, lstm_dim)
+    return add([x,y])
+
+def GLDR17(x):
+    x = Conv1D(lstm_dim, 3, padding='same')(x)
+    x = GLU(x, lstm_dim)
+    for dila in [1,2,4,8,16,1,1,1]:
+        x = ResBlock(x, dila)
+    return x
+
+def GLDR5(x):
+    x = Conv1D(lstm_dim, 3, padding='same')(x)
+    x = GLU(x, lstm_dim)
+    for dila in [2,1]:
+        x = ResBlock(x, dila)
+    return x
+
+def GLDR3(x):
+    x = Conv1D(lstm_dim, 3, padding='same')(x)
+    x = GLU(x, lstm_dim)
+    for dila in [1]:
+        x = ResBlock(x, dila)
+    return x
+
+quest_emb = Dense(lstm_dim, activation='relu')(quest_emb)
+cand_emb = Dense(lstm_dim, activation='relu')(cand_emb)
+
+sen_input = Input(shape=(None, int(quest_emb.shape[-1])))
+sen_model = Model(sen_input, GLDR5(sen_input))
+
+Q = sen_model(quest_emb)
+C = sen_model(cand_emb)
+
+Qmask = Lambda(lambda x:K.cast(K.equal(x,0), 'float32')*(-1e+10) )(quest_input)
+Cmask = Lambda(lambda x:K.cast(K.equal(x,0), 'float32')*(-1e+10) )(cand_input)
+
+CC = Lambda(lambda C:K.repeat_elements(C[:,:,None,:], setting.query_len, 2))(C)
+QQ = Lambda(lambda Q:K.repeat_elements(Q[:,None,:,:], setting.passage_len, 1))(Q)
+S_hat = concatenate([CC, QQ, multiply([CC, QQ])])
+S = Reshape((setting.passage_len, setting.query_len))( TimeDistributed(TimeDistributed(Dense(1, use_bias=False)))(S_hat) )
+
+aa = Activation('softmax')( Add()([S, Qmask]) )
+U_hat = Lambda(lambda x:K.batch_dot(x[0], x[1]))([aa, Q])
+
+bb = Activation('softmax')( Add()( [Lambda(lambda x: K.max(x, 2))(S), Cmask] ) )
+h_hat = Lambda( lambda x: K.batch_dot(K.expand_dims(x[0],1), x[1]) )([bb, C])
+H_hat = Lambda( lambda x: K.repeat_elements(x, setting.passage_len, 1) )(h_hat)
+
+
+G = concatenate([C, U_hat, multiply([C,U_hat]), multiply([C,H_hat])])
+M1 = GLDR17(G)
+M2 = GLDR3(M1)
+
+GM1 = concatenate([G, M1])
+GM2 = concatenate([G, M2])
+
+F1 = TimeDistributed(Dense(1, use_bias=False))(GM1)
+F2 = TimeDistributed(Dense(1, use_bias=False))(GM2)
+
+final_start = Activation('sigmoid', name='s')(Flatten()( F1 ))
+final_end   = Activation('sigmoid', name='e')(Flatten()( F2 ))
+
+model = Model(inputs=[questC_input, quest_input, candC_input, cand_input, questAc_input, questA_input, candAc_input, candA_input], outputs=[final_start, final_end])
+model.summary()
+
+
+if __name__ == '__main__':
+    name = 'bidaf_cnn'
+    training(name, model)
