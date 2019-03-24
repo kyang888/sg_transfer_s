@@ -97,38 +97,16 @@ def get_answer_arr(train_data):
     answer = set(train_data['answer'])
     tokens = train_data['passage']['passage_toks']
     y0, y1 = ComputeAnswerIndex(tokens, answer, answers)
-    # passage_text = train_data['passage']['passage_text']
-    # y0 = np.zeros(setting.passage_len)
-    # y1 = np.zeros(setting.passage_len)
-    # if len(train_data['answer_idx']) > 0:
-    #     for i in range(len(train_data['answer_idx'])):
-    #         s_idx = train_data['answer_idx'][i]['s_idx']
-    #         e_idx = train_data['answer_idx'][i]['e_idx']
-    #         y0[s_idx] = 1
-    #         y1[e_idx] = 1
-    #         posi_exp_cnt += 1
-    # else:
-    #     neg_exp_cnt += 1
-    #     for i in range(setting.passage_len):
-    #         mratio = 0.5
-    #         for j in range(i + 1, setting.passage_len):
-    #             if j - i > 10: break
-    #             ans = set(passage_text[i: j])
-    #             vcomm = len(ans.intersection(answer))
-    #             vratio = vcomm / (len(ans) + len(answer) - vcomm + 1e-10)
-    #             if vratio > mratio and vratio > y0[i] and vratio > y1[j]:
-    #                 mratio = vratio
-    #                 y0[i] = y1[j - 1] = vratio
     return y0, y1
 
 
 def get_c_ids(tokens):
     global setting
-    tokens = tokens[:setting.char_feature_len]
+    tokens = tokens[:setting.char_feature_len]  # to be modified!!!
     ret = []
     for tok in tokens:
         c_l = [c2id.get(char, 1) for char in tok]
-        ret.append(c_l[:10])
+        ret.append(c_l[:10])  # change to settings.length!!!
     return ret
 
 
