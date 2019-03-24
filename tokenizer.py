@@ -26,7 +26,7 @@ def tokenize_dataset(dataset):
         query_toks = data['query']['query_toks']
         y0, y1 = get_answer_arr(data)
         query_c_ids = get_c_ids(query_toks)
-        query_w_ids = [w2id.get(tok, 1) if tok in w2id else 1 for tok in query_toks]
+        query_w_ids = [w2id.get(tok, 1) for tok in query_toks]
         passage_c_ids = get_c_ids(passage_toks)
         passage_w_ids = [w2id.get(tok, 1) for tok in passage_toks]
         query_c_feature = data['query']['query_char_features']
