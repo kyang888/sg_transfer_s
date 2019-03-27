@@ -5,6 +5,8 @@
 
 结果评测在view_board.ipynb中展示
 
+百度webQA数据集 http://ai.baidu.com/broad/introduction?dataset=dureader
+
 ### 数据格式
 'query_id': 10000
 
