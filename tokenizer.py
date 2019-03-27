@@ -133,7 +133,7 @@ def MakeMatrix(tdata, low, high):
         if len(xp) == 1:
             XXs.append(np.zeros((num, xp[0]), dtype='int32'))
         elif len(xp) == 2:
-            XXs.append(np.zeros((num, xp[0], xp[1]), dtype='int32'))
+            XXs.append(np.zeros((num, xp[0], xp[1]), dtype='float64'))
         else:
             XXs.append(np.zeros((num, xp[0], xp[1], xp[2]), dtype='int32'))
 
