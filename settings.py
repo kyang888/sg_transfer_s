@@ -9,7 +9,7 @@ class Settings():
     def __init__(self):
         self.w_emb_size = 50
         self.c_emb_size = 50
-        self.query_len = 10
+        self.query_len = 30
         self.passage_len = 50
         self.word_len = 8
         self.char_feature_len = 10
