@@ -25,9 +25,9 @@ def tokenize_dataset(dataset):
         passage_toks = data['passage']['passage_toks']
         query_toks = data['query']['query_toks']
         y0, y1 = get_answer_arr(data)
-        query_c_ids = get_c_ids(query_toks)
+        query_c_ids = get_c_ids(query_toks, setting.query_len)
         query_w_ids = [w2id.get(tok, 1) for tok in query_toks]
-        passage_c_ids = get_c_ids(passage_toks)
+        passage_c_ids = get_c_ids(passage_toks, setting.passage_len)
         passage_w_ids = [w2id.get(tok, 1) for tok in passage_toks]
         query_c_feature = data['query']['query_char_features']
         query_w_feature = data['query']['query_context_features']
@@ -100,13 +100,13 @@ def get_answer_arr(train_data):
     return y0, y1
 
 
-def get_c_ids(tokens):
+def get_c_ids(tokens, m_length):
     global setting
-    tokens = tokens[:setting.char_feature_len]  # to be modified!!!
+    tokens = tokens[:m_length]
     ret = []
     for tok in tokens:
         c_l = [c2id.get(char, 1) for char in tok]
-        ret.append(c_l[:10])  # change to settings.length!!!
+        ret.append(c_l[:setting.word_len])
     return ret
 
 
@@ -147,12 +147,12 @@ def MakeMatrix(tdata, low, high):
             if len(xps[i]) == 1:
                 llns = llns[:le]
                 for kk, vv in enumerate(llns):
-                    XXs[i][k][le-len(llns)+kk] = vv
+                    XXs[i][k][kk] = vv
             elif len(xps[i]) == 2:
                 llns = llns[:le]
                 for kk, vv in enumerate(llns):
                     for k2, v2 in enumerate(vv):
-                        XXs[i][k][le-len(llns)+kk][xps[i][1] - len(vv) + k2] = v2
+                        XXs[i][k][le-len(llns)+kk][k2] = v2
             else:
                 XXs[i][k] = llns
     return XXs, YY
