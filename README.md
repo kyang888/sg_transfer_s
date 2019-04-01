@@ -8,6 +8,7 @@
 百度webQA数据集 http://ai.baidu.com/broad/introduction?dataset=dureader
 
 ### 数据格式
+```
 'query_id': 10000
 
 'answer': '林海音'
@@ -27,4 +28,4 @@
 
 {'passage_id': 3, 'passage_text': '《窃读记》的作者林海音的原名林海音简介\u3000林海音，女，原名林含英，原籍台湾省苗栗县，林海音于１９１８年３月１８日生于日本大阪，不久即返台，当时台湾已被日本帝国主义侵占，其父林焕父不甘在日寇铁蹄下生活，举家迁居北京，小英子即在北京长大。．．．', 'url': 'http://zhidao.baidu.com/question/81040161'}
 ]
-
+```
